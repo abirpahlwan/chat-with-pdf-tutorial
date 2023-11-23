@@ -1,5 +1,4 @@
 import os
-import pickle
 
 from dotenv import load_dotenv
 import streamlit as st
@@ -8,6 +7,9 @@ from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
+from langchain.llms import OpenAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.callbacks import get_openai_callback
 
 
 # Config
@@ -41,8 +43,6 @@ def main():
         for page in pdf_reader.pages:
             text += page.extract_text()
 
-        # st.write(text)
-
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -50,22 +50,31 @@ def main():
         )
 
         chunks = text_splitter.split_text(text=text)
-        # st.write(chunks)
 
-        # embeddings
-        db_name = pdf.name[:-4]  # remove last 4 chars .pdf
-        # st.write(f'{db_name}')
-
+        # Create embeddings
         embeddings = OpenAIEmbeddings()
 
+        db_name = pdf.name[:-4]  # remove last 4 chars .pdf
         if os.path.exists(f'store/{db_name}'):
             store = FAISS.load_local(f'store/{db_name}', embeddings)
-            st.write('Embeddings loaded from the disk')
+            st.info('Embeddings loaded from the disk')
         else:
-            store = FAISS.from_texts(chunks, embeddings)
-            # FAISS.save_local(store, f'{db_name}.index')
+            store = FAISS.from_texts(chunks, embeddings)    # costly OpenAI API Call
+            # FAISS.save_local(store, f'/{db_name}')
             store.save_local(f'store/{db_name}')
-            st.write('Embeddings saved to the disk')
+            st.info('Embeddings saved to the disk')
+
+        # user questions/query
+        query = st.text_input("Ask questions about your PDF file:")
+
+        if query:
+            docs = store.similarity_search(query=query, k=3)    # k = how many relevant docs to return
+            llm = OpenAI(temperature=0, model="gpt-3.5-turbo-instruct")
+            chain = load_qa_chain(llm=llm, chain_type="stuff")
+            with get_openai_callback() as cb:
+                response = chain.run(input_documents=docs, question=query)
+                print(cb)   # prints token usage and cost in console
+            st.write(response)
 
     pass
 
